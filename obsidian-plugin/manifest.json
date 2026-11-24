@@ -1,7 +1,7 @@
 {
   "id": "obsidian2blog",
   "name": "Obsidian2Blog",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "minAppVersion": "1.5.7",
   "description": "创建、预览和发布 Obsidian 博客笔记。",
   "author": "Obsidian2Blog contributors",

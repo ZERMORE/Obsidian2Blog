@@ -35,9 +35,12 @@ class BlogSettings extends PluginSettingTab {
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
 
+const SITE_SECTIONS = { introduction: "自述", chronicle: "时间轴", roll: "连结", preface: "首页简介 / 序文", policy: "网站政策" };
+const SITE_NOTE = /^Publish\/site\/(zh-cn|en|ja)\/(introduction|chronicle|roll|preface|policy)\.md$/;
+
 function publishFiles(vault) {
   return vault.getMarkdownFiles().filter(file =>
-    file.path.startsWith("Publish/") && !file.name.startsWith("_"));
+    file.path.startsWith("Publish/") && !file.path.startsWith("Publish/site/") && !file.name.startsWith("_"));
 }
 
 function readProperties(content) {
@@ -292,7 +295,8 @@ class PublishPanel extends Modal {
         this.openCreator();
       });
     });
-    const notes = publishFiles(vault).flatMap(file => {
+    const siteFiles = vault.getMarkdownFiles().filter(file => SITE_NOTE.test(file.path));
+    const notes = [...publishFiles(vault), ...siteFiles].flatMap(file => {
       const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter;
       return metadata?.draft === false ? [{ file, metadata }] : [];
     });
@@ -309,6 +313,11 @@ class PublishPanel extends Modal {
         .setName("笔记")
         .addDropdown(dropdown => {
           for (const { file, metadata } of notes) {
+            const site = SITE_NOTE.exec(file.path);
+            if (site) {
+              dropdown.addOption(file.path, "网站内容 · " + SITE_SECTIONS[site[2]] + " · " + site[1]);
+              continue;
+            }
             const destination = [metadata.type, metadata.locale, metadata.slug].filter(Boolean).join("/");
             dropdown.addOption(file.path, `${metadata.title || file.basename} · ${destination || file.path}`);
           }
@@ -319,22 +328,22 @@ class PublishPanel extends Modal {
           this.dropdown = dropdown;
         });
       new Setting(this.contentEl).addButton(button => {
-        button.setButtonText("预览").onClick(() => this.run("preview"));
-        this.previewButton = button;
-      }).addButton(button => {
         button.setButtonText("同步到本地").onClick(() => this.run("sync"));
         this.syncButton = button;
+      }).addButton(button => {
+        button.setButtonText("同步并构建").onClick(() => this.run("build"));
+        this.buildButton = button;
       }).addButton(button => {
         button.setButtonText("发布到 GitHub").setCta().onClick(() => this.run("publish"));
         this.publishButton = button;
       });
       this.contentEl.createEl("p", {
         cls: "setting-item-description",
-        text: "同步会覆盖博客中同一 type、locale 和 slug 的文章。发布还会推送目标分支上已有的待推送提交。"
+        text: "同步会更新对应文章或网站区块。发布还会推送目标分支上已有的待推送提交。"
       });
     } else {
       this.contentEl.createEl("p", {
-        text: "当前没有可发布笔记。创建草稿后，将 draft 设为 false 即可在此发布。"
+        text: "当前没有可发布内容。将文章或 Publish/site 下的页面笔记的 draft 设为 false 即可发布。"
       });
     }
 
@@ -352,7 +361,7 @@ class PublishPanel extends Modal {
 
   render() {
     this.dropdown?.setDisabled(this.running);
-    this.previewButton?.setDisabled(this.running);
+    this.buildButton?.setDisabled(this.running);
     this.syncButton?.setDisabled(this.running);
     this.publishButton?.setDisabled(this.running);
     this.statusEl?.setText(this.status);
@@ -376,7 +385,7 @@ class PublishPanel extends Modal {
       if (!existsSync(script)) throw new Error(`找不到博客发布脚本：${script}`);
       const vaultRoot = this.app.vault.adapter.getBasePath();
       const args = ["--import", "tsx", script, "--obsidian", join(vaultRoot, this.selected)];
-      if (mode === "preview") args.push("--dry-run");
+      if (mode !== "build") args.push("--skip-check");
       if (mode === "publish") args.push("--push");
       const status = await new Promise((resolve, reject) => {
         const child = spawn(node, args, {
@@ -396,8 +405,8 @@ class PublishPanel extends Modal {
       });
       if (status !== 0) throw new Error("操作未完成，详情见日志。");
       this.status = {
-        preview: "预览完成。",
-        sync: "本地同步及 Astro 构建完成。",
+        sync: "本地同步完成。",
+        build: "本地同步、Astro 检查与构建完成。",
         publish: "已推送到 GitHub。请在 Actions 查看部署状态。"
       }[mode];
     } catch (error) {

@@ -20,9 +20,23 @@ Obsidian2Blog 包含一个 Obsidian 桌面插件和一个基于 ThoughtLite 的 
 
 1. 点左侧云上传图标，选择 **新建博客笔记**。填写用于网址的 slug，例如 `my-first-post`。文章可选一个系列，文章和随笔均可选多个标签。
 2. 原稿保存在 `Publish/<type>/<slug>/<slug>.md`。把图片放进同级 `assets/`，使用 `![[assets/overview.png]]` 引用。如果希望粘贴图片时自动存入该目录，在 Obsidian 的附件位置配置中选择当前文件所在文件夹下的子文件夹，并填入 `assets`。
-3. 写完后把 `draft` 改成 `false`。在发布面板选中文章，可以先 **预览**，也可以直接点 **发布到 GitHub**。推送后在博客仓库的 **Actions** 查看部署进度。
+3. 写完后把 `draft` 改成 `false`。在发布面板选中文章，可以 **同步到本地** 只写文件，**同步并构建** 以运行 Astro 检查与构建，或 **发布到 GitHub** 直接提交并推送本次同步的文件。推送后在博客仓库的 **Actions** 查看部署进度。
 
 以后修改同一篇文章，只要保留 `type`、`locale` 和 `slug`，再次发布就会更新原网址。插件每次打开新建表单时，会重读博客内容和 `Publish/` 中的系列、标签。同步和发布都由按钮触发。
+
+## 从 Obsidian 编辑网站内容
+
+将 `vault-templates/site/` 复制到笔记仓库的 `Publish/site/`。每种语言有一个目录，支持 `zh-cn`、`en` 和 `ja`。
+
+| 笔记 | 网站区块 |
+| --- | --- |
+| `introduction.md` | 关于页的自述 |
+| `chronicle.md` | 关于页的时间轴 |
+| `roll.md` | 关于页的连结 |
+| `preface.md` | 首页简介与序文 |
+| `policy.md` | 网站政策 |
+
+用 Markdown 编辑，设为 `draft: false` 后在发布面板选择对应的「网站内容」条目。时间轴使用 `## YYYY-MM-DD` 日期标题和 `- 事件` 列表，发布时替换该语言的时间轴。序文默认使用笔记修改日期，亦可在属性中填写 `timestamp`，网站显示日期最新的一篇。
 
 ## 来源与许可
 

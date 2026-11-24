@@ -27,6 +27,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const siteRoot = resolve(scriptDirectory, "..");
 const vaultRoot = resolve(process.env.OBSIDIAN_VAULT || ".");
 const publishRoot = join(vaultRoot, "Publish");
+const siteNotesRoot = join(publishRoot, "site");
 const contentRoot = join(siteRoot, "src", "content");
 const siteSettings = JSON.parse(readFileSync(join(siteRoot, "site.config.json"), "utf8"));
 const siteBase = String(siteSettings.base || "/").replace(/\/+$/, "");
@@ -48,7 +49,7 @@ function markdownFiles(directory: string): string[] {
 
 	return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
 		const path = join(directory, entry.name);
-		if (entry.isDirectory()) return markdownFiles(path);
+		if (entry.isDirectory()) return path === siteNotesRoot ? [] : markdownFiles(path);
 		return entry.isFile() && extname(entry.name).toLowerCase() === ".md" && !entry.name.startsWith("_") ? [path] : [];
 	});
 }
@@ -101,7 +102,7 @@ function filesRecursively(directory: string): string[] {
 	});
 }
 
-function findAttachment(article: SourceArticle, reference: string): string | undefined {
+function findAttachment(article: Pick<SourceArticle, "path">, reference: string): string | undefined {
 	const clean = decodeURIComponent(reference.split("#")[0]).replace(/\\/g, "/");
 	const articleDirectory = dirname(article.path);
 	const candidates = [resolve(articleDirectory, clean)];
@@ -130,7 +131,7 @@ function normalizedAssetName(filename: string): string {
 	return pasted ? `image-${pasted[1]}-${pasted[2]}${parsed.ext.toLowerCase()}` : filename;
 }
 
-function destinationAssetPath(article: SourceArticle, source: string): string {
+function destinationAssetPath(article: Pick<SourceArticle, "path">, source: string): string {
 	const articleDirectory = dirname(article.path);
 	const sourceRelative = relative(articleDirectory, source);
 	const parts = sourceRelative.split(sep);
@@ -140,12 +141,13 @@ function destinationAssetPath(article: SourceArticle, source: string): string {
 	return destinationParts.join("/");
 }
 
-function transform(article: SourceArticle, articles: SourceArticle[]): { body: string; assets: Map<string, string>; warnings: string[] } {
+function transform(article: Pick<SourceArticle, "path" | "body">, articles: SourceArticle[], assetSection?: string): { body: string; assets: Map<string, string>; warnings: string[] } {
 	let body = article.body;
 	const assets = new Map<string, string>();
 	const warnings: string[] = [];
 	const registerAsset = (source: string): string => {
-		const destination = destinationAssetPath(article, source);
+		const asset = destinationAssetPath(article, source);
+		const destination = assetSection ? "assets/" + assetSection + "/" + asset.slice("assets/".length) : asset;
 		const existing = assets.get(destination);
 		if (existing && resolve(existing) !== resolve(source)) throw new Error(`附件发布路径冲突：${destination}`);
 		assets.set(destination, source);
@@ -240,13 +242,13 @@ function checkPublishTarget(): void {
 	if (!urls || /[\r\n]/.test(urls)) throw new Error("请为博客部署远端配置唯一的推送地址");
 }
 
-function commitAndPush(article: SourceArticle, paths: string[]): void {
+function commitAndPush(label: string, paths: string[]): void {
 	checkPublishTarget();
 	const files = paths.map(path => relative(siteRoot, path).split(sep).join("/"));
 	log.step("提交本次同步的文件");
 	git(["add", "--", ...files]);
 	if (git(["diff", "--cached", "--name-only", "--", ...files], true)) {
-		git(["commit", "--only", "-m", `Publish ${article.meta.slug} from Obsidian`, "--", ...files]);
+		git(["commit", "--only", "-m", `Publish ${label} from Obsidian`, "--", ...files]);
 	} else {
 		log.info("本次同步没有产生新的提交");
 	}
@@ -255,16 +257,105 @@ function commitAndPush(article: SourceArticle, paths: string[]): void {
 	git(["push", remote, ref + ":" + ref]);
 }
 
+
+function timelineYaml(body: string): string {
+	const timeline: Record<string, string[]> = {};
+	let date: string | undefined;
+	for (const line of body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
+		const heading = /^#{1,6}\s+(\d{4}-\d{2}-\d{2})$/.exec(line);
+		if (heading) {
+			date = heading[1];
+			const parsed = new Date(date);
+			if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+				throw new Error("时间轴日期无效：" + date);
+			}
+			timeline[date] ??= [];
+			continue;
+		}
+		const event = /^[-*+]\s+(.+)$/.exec(line);
+		if (!date || !event) throw new Error("时间轴请使用日期标题和列表项：" + line);
+		timeline[date].push(event[1]);
+	}
+	return stringify(timeline, { lineWidth: 0 });
+}
+
+function checkAndBuild(): void {
+	if (process.argv.includes("--skip-check")) return;
+	runAstro("check");
+	runAstro("build");
+}
+
+function syncSiteNote(path: string): void {
+	const [locale, name, extra] = relative(siteNotesRoot, path).split(sep);
+	const section = basename(name ?? "", ".md");
+	const markdownSections = new Set(["introduction", "roll", "policy", "preface"]);
+	if (extra || !allowedLocales.has(locale) || name !== section + ".md" ||
+		(section !== "chronicle" && !markdownSections.has(section))) {
+		throw new Error("未知网站内容，请使用 Publish/site/<语言>/<区块>.md");
+	}
+	if (!existsSync(path) || !isWithin(realpathSync(publishRoot), realpathSync(path))) {
+		throw new Error("网站内容必须是 Publish 目录中的文件");
+	}
+	const input = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
+	const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/.exec(input);
+	const meta = match && parse(match[1]);
+	if (!match || meta?.draft !== false) throw new Error("请先在网站内容笔记中设置 draft: false");
+	if (push) checkPublishTarget();
+
+	const directory = join(contentRoot, section === "preface" ? "preface" : "information", locale);
+	const target = join(directory, section === "preface" ? "obsidian-preface.md" :
+		section + (section === "chronicle" ? ".yaml" : ".md"));
+	const outputs = new Map<string, string>();
+	let content = match[2];
+	if (section === "chronicle") {
+		content = timelineYaml(content);
+	} else {
+		const converted = transform({ path, body: content }, loadArticles().filter(article => article.meta.draft === false), section);
+		content = converted.body;
+		converted.warnings.forEach(warning => log.warn(warning));
+		for (const [asset, source] of converted.assets) outputs.set(join(directory, asset), source);
+		if (section === "preface") {
+			const timestamp = meta.timestamp ?? statSync(path).mtime.toISOString();
+			if (typeof timestamp !== "string" || !Number.isFinite(new Date(timestamp).getTime())) {
+				throw new Error("序文的 timestamp 格式无效");
+			}
+			content = "---\n" + stringify({ timestamp }) + "---\n\n" + content.trimStart();
+		}
+	}
+
+	log.info((dryRun ? "将写入：" : "同步网站内容：") + target);
+	for (const destination of outputs.keys()) log.info("附件：" + destination);
+	if (dryRun) return outro("检查完成，未写入文件");
+
+	mkdirSync(directory, { recursive: true });
+	writeFileSync(target, content, "utf8");
+	for (const [destination, source] of outputs) {
+		mkdirSync(dirname(destination), { recursive: true });
+		copyFileSync(source, destination);
+	}
+	checkAndBuild();
+	if (push) {
+		commitAndPush("site " + locale + "/" + section, [target, ...outputs.keys()]);
+		outro("GitHub 已接收推送，可在 Actions 查看部署进度");
+	} else {
+		outro("网站内容已同步并完成本地构建");
+	}
+}
+
+
 async function main() {
 	intro("Obsidian → Obsidian2Blog");
 	if (!process.env.OBSIDIAN_VAULT) throw new Error("请通过插件运行，或设置 OBSIDIAN_VAULT 指向笔记仓库");
 	if (!existsSync(publishRoot)) throw new Error(`发布目录不存在：${publishRoot}`);
 
-	const articles = loadArticles();
-	if (!articles.length) throw new Error(`没有找到可发布文章，请先在 ${publishRoot} 中创建文章`);
-
 	const argument = process.argv.slice(2).find(value => !value.startsWith("--"));
 	if (fromObsidian && (!argument || !isAbsolute(argument))) throw new Error("请指定笔记的绝对路径");
+	if (fromObsidian && argument && isWithin(siteNotesRoot, resolve(argument))) {
+		return syncSiteNote(resolve(argument));
+	}
+
+	const articles = loadArticles();
+	if (!articles.length) throw new Error(`没有找到可发布文章，请先在 ${publishRoot} 中创建文章`);
 	let article: SourceArticle | undefined;
 	if (argument) {
 		const requested = resolve(argument);
@@ -314,13 +405,10 @@ async function main() {
 	});
 	log.success(`已同步到 ${relative(siteRoot, destinationMarkdown).split(sep).join("/")}`);
 
-	if (fromObsidian || !process.argv.includes("--skip-check")) {
-		runAstro("check");
-		runAstro("build");
-	}
+	checkAndBuild();
 
 	if (push) {
-		commitAndPush(article, [destinationMarkdown, ...Array.from(converted.assets.keys(), path => join(destinationDirectory, path))]);
+		commitAndPush(article.meta.slug, [destinationMarkdown, ...Array.from(converted.assets.keys(), path => join(destinationDirectory, path))]);
 		return outro("GitHub 已接收推送，可在 Actions 查看部署进度");
 	}
 	outro("发布文件已准备好；请检查 Git diff 后自行提交和推送");
