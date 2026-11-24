@@ -1,0 +1,32 @@
+.obsidian2blog-publish-log {
+  max-height: min(42vh, 24rem);
+  overflow: auto;
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.obsidian2blog-post-tags {
+  min-inline-size: 0;
+  margin: var(--size-4-2) 0;
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.obsidian2blog-post-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2) var(--size-4-3);
+  max-height: 10rem;
+  overflow: auto;
+}
+
+.obsidian2blog-post-tag-list label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  overflow-wrap: anywhere;
+}
